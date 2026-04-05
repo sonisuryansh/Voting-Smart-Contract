@@ -215,7 +215,7 @@ contract Vote {
         stopVoting = true;
     }
 
-    function resetElection() external onlyCommissioner {
+    function reset_Election() external onlyCommissioner {
 
         for (uint i = 1; i < nextCandidateId; i++) {
             delete candidateDetails[i];
