@@ -1,19 +1,22 @@
 // SPDX-License-Identifier: GPL-3.0
+pragma solidity ^0.8.0;
 
-pragma solidity >=0.7.0 <0.9.0;
+contract Vote {
 
-contract Vote{
+    enum VotingStatus { NotStarted, InProgress, Ended }
+    enum Gender { NotSpecified, Male, Female, Other }
+
     struct Voter {
         string name;
         uint age;
         uint voterId;
         Gender gender;
-        uint voterCandidateId;
+        uint votedCandidateId;
         address voterAddress;
     }
 
-    struct Candidate{
-        string name ;
+    struct Candidate {
+        string name;
         string party;
         uint age;
         Gender gender;
@@ -23,144 +26,212 @@ contract Vote{
     }
 
     address public electionCommission;
-    address public winner ;
-    uint nextVoterId = 1;
-    uint nextCandidateId = 1;
+    address public winner;
+
+    uint public nextVoterId = 1;
+    uint public nextCandidateId = 1;
+    uint public maxCandidates = 5;
+
+    uint public startTime;
+    uint public endTime;
+
+    bool public stopVoting;
+    bool public resultDeclared;
+
+    mapping(uint => Voter) public voterDetails;
+    mapping(uint => Candidate) public candidateDetails;
+
+    mapping(address => bool) public isVoterRegistered;
+    mapping(address => bool) public isCandidateRegistered;
+    mapping(address => uint) public voterIdByAddress;
 
 
-    uint startTime;
-    uint endTime;
-    bool stopVoting;
+    event VoterRegistered(address voter, uint voterId);
+    event CandidateRegistered(address candidate, uint candidateId);
+    event VoteCasted(address voter, uint candidateId);
+    event WinnerDeclared(address winner);
 
-
-    mapping(uint => Voter) voterDetails ;
-    mapping(uint => Candidate) candidateDetails ;
-
-    enum VotingStatus {NotStarted , Inprogress, Ended}
-    enum Gender {NotSpecified , Male , Female ,Other }
-
-    constructor(){
+    constructor() {
         electionCommission = msg.sender;
     }
 
-    modifier isVotingOver (){
-        require(block.timestamp<=endTime && stopVoting ==false , "Voting time is Over");
+    modifier onlyCommissioner() {
+        require(msg.sender == electionCommission, "Not authorized");
         _;
     }
 
-    modifier onlyCommissioner (){
-        require(msg.sender==electionCommission, "Not Authurized");
+    modifier isValidAge(uint _age) {
+        require(_age >= 18, "Not eligible");
         _;
     }
 
-    modifier isValidAge(uint _age){
-        require (_age >=18 , "not eligible for Voting");
+    modifier isVotingActive() {
+        require(block.timestamp >= startTime, "Voting not started");
+        require(block.timestamp <= endTime, "Voting ended");
+        require(!stopVoting, "Voting stopped");
         _;
     }
 
-    function registerCandidate(string calldata _name, string calldata _party, uint _age, Gender _gender)external isValidAge(_age){
-
-            require (isCandidateNotRegistered(msg.sender),"You are already registered");
-            require (nextCandidateId<3,"Candidate Registration Full");
-            require (msg.sender!= electionCommission,"Election Commission not allowed to register");
-
-            candidateDetails[nextCandidateId]= Candidate({
-                name : _name,
-                party:_party,
-                age:_age,
-                gender:_gender,
-                candidateId : nextCandidateId,
-                candidateAddress:msg.sender, 
-                votes :0
-            });
-
-            nextCandidateId++;
+    modifier resultNotDeclared() {
+        require(!resultDeclared, "Result already declared");
+        _;
     }
 
-    function isCandidateNotRegistered(address _person) private view returns (bool){
-        for(uint i=1;i<nextCandidateId;i++){
-            if(candidateDetails[i].candidateAddress==_person){
-                return false;
-            }
-        }
-        return true;
-    }
+    function registerCandidate(
+        string calldata _name,
+        string calldata _party,
+        uint _age,
+        Gender _gender
+    ) external isValidAge(_age) {
 
-    function getCandidateList() public view returns(Candidate[] memory){
-        Candidate [] memory candidateList = new Candidate[](nextCandidateId-1);
-        for(uint i = 0;i< candidateList.length;i++){
-            candidateList[i] = candidateDetails[i+1];
-        }
-        return candidateList;
-    }
+        require(!isCandidateRegistered[msg.sender], "Already registered");
+        require(nextCandidateId <= maxCandidates, "Limit reached");
+        require(msg.sender != electionCommission, "Commission cannot register");
 
-    function isVoterNotRegistered (address _person) private view returns(bool){
-        for(uint i=1;i<nextVoterId;i++){
-            if(voterDetails[i].voterAddress == _person){
-                return false;
-            }
-        }
-        return true;
-    }
-
-    function registerVoter(string calldata _name, uint _age, Gender _gender) external isValidAge (_age){
-        require(isVoterNotRegistered(msg.sender),"You are already Registered");
-        voterDetails [nextVoterId] = Voter({
-            name:_name,age : _age, voterId : nextVoterId, gender : _gender, voterCandidateId:0, voterAddress:msg.sender 
+        candidateDetails[nextCandidateId] = Candidate({
+            name: _name,
+            party: _party,
+            age: _age,
+            gender: _gender,
+            candidateId: nextCandidateId,
+            candidateAddress: msg.sender,
+            votes: 0
         });
+
+        isCandidateRegistered[msg.sender] = true;
+
+        emit CandidateRegistered(msg.sender, nextCandidateId);
+
+        nextCandidateId++;
+    }
+
+    function registerVoter(
+        string calldata _name,
+        uint _age,
+        Gender _gender
+    ) external isValidAge(_age) {
+
+        require(!isVoterRegistered[msg.sender], "Already registered");
+
+        voterDetails[nextVoterId] = Voter({
+            name: _name,
+            age: _age,
+            voterId: nextVoterId,
+            gender: _gender,
+            votedCandidateId: 0,
+            voterAddress: msg.sender
+        });
+
+        voterIdByAddress[msg.sender] = nextVoterId;
+        isVoterRegistered[msg.sender] = true;
+
+        emit VoterRegistered(msg.sender, nextVoterId);
+
         nextVoterId++;
     }
 
+    function castVote(uint _candidateId) external isVotingActive resultNotDeclared {
 
-    function getVoterList() public view returns (Voter[] memory){
-        uint lengthArr = nextVoterId-1;
-        Voter[] memory voterList = new Voter[](lengthArr);
-        for(uint i = 0 ; i<voterList.length;  i++){
-            voterList[i] = voterDetails[i+1];
-        }
-        return voterList;
-    }
+        require(isVoterRegistered[msg.sender], "Not a voter");
 
-    function castVote (uint _voterId, uint _candidateId) external isVotingOver(){
-        require(block.timestamp>= startTime ,"Voting has not started yet");
-        require(voterDetails[_voterId].voterCandidateId ==0 ,"You have already voted ");
-        require(voterDetails[_voterId].voterAddress == msg.sender,"You are not authorized");
-        require(_candidateId>=1 && _candidateId <3 ,"Camdidate Id is not Correct ");
-        voterDetails [_voterId].voterCandidateId = _candidateId ;
+        uint voterId = voterIdByAddress[msg.sender];
+        Voter storage voter = voterDetails[voterId];
+
+        require(voter.votedCandidateId == 0, "Already voted");
+        require(_candidateId >= 1 && _candidateId < nextCandidateId, "Invalid candidate");
+
+        voter.votedCandidateId = _candidateId;
         candidateDetails[_candidateId].votes++;
+
+        emit VoteCasted(msg.sender, _candidateId);
     }
 
+    function setVotingPeriod(uint _startDelay, uint _duration) external onlyCommissioner {
+        require(_duration >= 1 hours, "Minimum 1 hour");
 
-    function setVotingPeriod(uint _startTimeDuration, uint _endTimeDuration) external onlyCommissioner(){
-        require (_endTimeDuration>3600,"_endTimeDuration must be greater than 1 Hour");
-        startTime = 1720799550+_startTimeDuration;
-        endTime = startTime+_endTimeDuration;
+        startTime = block.timestamp + _startDelay;
+        endTime = startTime + _duration;
     }
 
-    function getVotingStatus() public view returns (VotingStatus){
-        if(startTime == 0){
-            return VotingStatus.NotStarted;
-        }else if (endTime>block.timestamp && stopVoting == false){
-            return VotingStatus.Inprogress;
-        }else{
-            return VotingStatus.Ended;
-        }
+    function getVotingStatus() public view returns (VotingStatus) {
+        if (startTime == 0) return VotingStatus.NotStarted;
+        if (block.timestamp <= endTime && !stopVoting) return VotingStatus.InProgress;
+        return VotingStatus.Ended;
     }
 
+    function announceVotingResult() external onlyCommissioner {
 
-    function announceVotingResult() external onlyCommissioner(){
-        uint max = 0;
-        for(uint i = 1; i<nextCandidateId;i++){
-            if(candidateDetails[i].votes>max){
-                max= candidateDetails[i].votes;
-                winner= candidateDetails[i].candidateAddress;
+        require(block.timestamp > endTime || stopVoting, "Voting not ended");
+
+        uint maxVotes = 0;
+        address win;
+
+        for (uint i = 1; i < nextCandidateId; i++) {
+            if (candidateDetails[i].votes > maxVotes) {
+                maxVotes = candidateDetails[i].votes;
+                win = candidateDetails[i].candidateAddress;
             }
         }
+
+        winner = win;
+        resultDeclared = true;
+
+        emit WinnerDeclared(winner);
     }
 
-    function emergencyStopVotin() public onlyCommissioner(){
+    function getWinner() public view returns (Candidate memory) {
+        require(resultDeclared, "Result not declared");
+
+        for (uint i = 1; i < nextCandidateId; i++) {
+            if (candidateDetails[i].candidateAddress == winner) {
+                return candidateDetails[i];
+            }
+        }
+
+        revert("Winner not found");
+    }
+
+    function getCandidateList() public view returns (Candidate[] memory) {
+        Candidate[] memory list = new Candidate[](nextCandidateId - 1);
+
+        for (uint i = 0; i < list.length; i++) {
+            list[i] = candidateDetails[i + 1];
+        }
+
+        return list;
+    }
+
+    function getVoterList() public view returns (Voter[] memory) {
+        Voter[] memory list = new Voter[](nextVoterId - 1);
+
+        for (uint i = 0; i < list.length; i++) {
+            list[i] = voterDetails[i + 1];
+        }
+
+        return list;
+    }
+
+    function emergencyStopVoting() external onlyCommissioner {
         stopVoting = true;
     }
 
+    function resetElection() external onlyCommissioner {
 
+        for (uint i = 1; i < nextCandidateId; i++) {
+            delete candidateDetails[i];
+        }
+
+        for (uint i = 1; i < nextVoterId; i++) {
+            address voterAddr = voterDetails[i].voterAddress;
+            delete isVoterRegistered[voterAddr];
+            delete voterIdByAddress[voterAddr];
+            delete voterDetails[i];
+        }
+
+        nextCandidateId = 1;
+        nextVoterId = 1;
+        winner = address(0);
+        stopVoting = false;
+        resultDeclared = false;
+    }
 }
