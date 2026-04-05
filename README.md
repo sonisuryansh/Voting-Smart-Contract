@@ -32,7 +32,7 @@
 
 </div>
 <p>
-  this is testing phase
+  this is testing phase and looking for bugs.
   
 </p>
 
